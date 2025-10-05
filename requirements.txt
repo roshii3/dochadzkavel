@@ -1,4 +1,6 @@
-streamlit==1.38.0
-pandas==2.2.2
-pytz==2024.1
-supabase==2.4.5
+
+streamlit
+pandas
+pytz
+supabase
+streamlit-autorefresh
