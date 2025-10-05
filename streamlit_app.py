@@ -1,113 +1,88 @@
 import streamlit as st
-import pandas as pd
 from datetime import datetime, timedelta
 import pytz
 from supabase import create_client, Client
+import pandas as pd
+from streamlit_autorefresh import st_autorefresh
 
-# ==============================
-# Streamlit konfigurácia
-# ==============================
-st.set_page_config(page_title="Denný prehľad – Veliteľ", page_icon="🕒", layout="wide")
-st.markdown("<h2 style='text-align:center;'>🕒 Denný prehľad prítomnosti</h2>", unsafe_allow_html=True)
+# ==========================
+# ZÁKLADNÉ NASTAVENIA
+# ==========================
+st.set_page_config(page_title="Prehľad dochádzky", page_icon="📋", layout="wide")
 
-# Skrytie menu a footeru
-hide_style = """
-<style>
-#MainMenu, footer, header {visibility: hidden;}
-</style>
+hide_menu = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    .reportview-container .markdown-text-container {
+        font-size: 1.1rem;
+    }
+    </style>
 """
-st.markdown(hide_style, unsafe_allow_html=True)
+st.markdown(hide_menu, unsafe_allow_html=True)
 
-# ==============================
-# Automatický refresh
-# ==============================
-st_autorefresh = st.experimental_rerun
-st_autorefresh_count = st.experimental_get_query_params().get("refresh", [0])[0]
-st_autorefresh_count = int(st_autorefresh_count) + 1
-st.markdown(f"<meta http-equiv='refresh' content='30;url=?refresh={st_autorefresh_count}'>", unsafe_allow_html=True)
-
-# ==============================
-# Pripojenie k databáze
-# ==============================
+# ==========================
+# PRIPOJENIE NA DATABÁZU
+# ==========================
 DATABAZA_URL = st.secrets.get("DATABAZA_URL")
 DATABAZA_KEY = st.secrets.get("DATABAZA_KEY")
 supabase: Client = create_client(DATABAZA_URL, DATABAZA_KEY)
 
-tz = pytz.timezone("Europe/Bratislava")
-today = datetime.now(tz).date()
-yesterday = today - timedelta(days=1)
+# ==========================
+# AUTOMATICKÉ OBNOVOVANIE
+# ==========================
+st_autorefresh(interval=30000, key="datarefresh")  # každých 30 sekúnd
 
-# ==============================
-# Načítanie dát
-# ==============================
-@st.cache_data(ttl=20)
-def load_data():
-    res = supabase.table("attendance").select("*").execute()
-    df = pd.DataFrame(res.data)
+# ==========================
+# FUNKCIA NA NAČÍTANIE DÁT
+# ==========================
+def nacitaj_data():
+    tz = pytz.timezone("Europe/Bratislava")
+    dnes = datetime.now(tz).date()
+    vcera = dnes - timedelta(days=1)
+
+    # Stiahneme posledné 2 dni
+    result = supabase.table("attendance").select("*").execute()
+    df = pd.DataFrame(result.data)
+
     if df.empty:
-        return df
+        return pd.DataFrame()
+
     df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df["date"] = df["timestamp"].dt.date
-    return df
+    df["local_date"] = df["timestamp"].dt.tz_convert("Europe/Bratislava").dt.date
+    df["local_time"] = df["timestamp"].dt.tz_convert("Europe/Bratislava").dt.strftime("%H:%M:%S")
 
-df = load_data()
+    df = df[df["local_date"].isin([dnes, vcera])]
 
-if df.empty:
-    st.warning("⚠️ Žiadne dáta pre zobrazenie.")
-    st.stop()
+    # Skryjeme user_code
+    df = df[["local_date", "local_time", "position", "action", "valid"]]
+    df.rename(columns={
+        "local_date": "Dátum",
+        "local_time": "Čas",
+        "position": "Pozícia",
+        "action": "Akcia",
+        "valid": "Platný čas"
+    }, inplace=True)
 
-# ==============================
-# Spracovanie dát
-# ==============================
-def summarize_day(df_day):
-    records = []
-    for pos, group in df_day.groupby("position"):
-        arrivals = group[group["action"] == "Príchod"]
-        departures = group[group["action"] == "Odchod"]
+    df["Platný čas"] = df["Platný čas"].apply(lambda x: "✅ Áno" if x else "⚠️ Nie")
 
-        pr_times = sorted(arrivals["timestamp"].dt.strftime("%H:%M").tolist())
-        od_times = sorted(departures["timestamp"].dt.strftime("%H:%M").tolist())
+    return df.sort_values(by=["Dátum", "Čas"], ascending=[False, True])
 
-        pr_display = ", ".join(pr_times) if pr_times else "—"
-        od_display = ", ".join(od_times) if od_times else "—"
+# ==========================
+# HLAVNÉ ZOBRAZENIE
+# ==========================
+st.title("📋 Prehľad dochádzky (Veliteľ)")
 
-        if pr_times and od_times:
-            status = "🟢 OK"
-        elif pr_times or od_times:
-            status = "🟠 Chýba údaj"
-        else:
-            status = "🔴 Bez záznamu"
+if st.button("🔄 Obnoviť dáta"):
+    st.experimental_rerun()
 
-        records.append({
-            "Pozícia": pos,
-            "Príchody": pr_display,
-            "Odchody": od_display,
-            "Stav": status
-        })
-    return pd.DataFrame(records)
+data = nacitaj_data()
 
-# ==============================
-# Zobrazenie
-# ==============================
-tab1, tab2 = st.tabs([f"Dnes ({today.strftime('%d.%m.%Y')})", f"Včera ({yesterday.strftime('%d.%m.%Y')})"])
-
-with tab1:
-    df_today = df[df["date"] == today]
-    if df_today.empty:
-        st.info("Žiadne záznamy pre dnešok.")
-    else:
-        summary_today = summarize_day(df_today)
-        st.dataframe(summary_today, use_container_width=True, hide_index=True)
-
-with tab2:
-    df_yest = df[df["date"] == yesterday]
-    if df_yest.empty:
-        st.info("Žiadne záznamy pre včerajšok.")
-    else:
-        summary_yest = summarize_day(df_yest)
-        st.dataframe(summary_yest, use_container_width=True, hide_index=True)
-
-# ==============================
-# Poznámka o automatickom obnovení
-# ==============================
-st.caption("⏳ Dáta sa automaticky obnovujú každých 30 sekúnd.")
+if data.empty:
+    st.info("Žiadne záznamy za dnešok ani včerajšok.")
+else:
+    # Rozdelenie podľa dátumu
+    for datum, skupina in data.groupby("Dátum"):
+        st.subheader(f"📅 {datum.strftime('%d.%m.%Y')}")
+        st.dataframe(skupina, use_container_width=True, hide_index=True)
