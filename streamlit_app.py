@@ -1,99 +1,113 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, time
+from datetime import datetime, timedelta
+import pytz
 from supabase import create_client, Client
 
-# =====================================
-# Konfigurácia aplikácie
-# =====================================
-st.set_page_config(page_title="Denný prehľad SBS", layout="wide")
+# ==============================
+# Streamlit konfigurácia
+# ==============================
+st.set_page_config(page_title="Denný prehľad – Veliteľ", page_icon="🕒", layout="wide")
+st.markdown("<h2 style='text-align:center;'>🕒 Denný prehľad prítomnosti</h2>", unsafe_allow_html=True)
 
-# Skrytie hlavičky, menu a päty Streamlitu
-hide_streamlit_style = """
-    <style>
-    #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
-    footer {visibility: hidden;}
-    </style>
+# Skrytie menu a footeru
+hide_style = """
+<style>
+#MainMenu, footer, header {visibility: hidden;}
+</style>
 """
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+st.markdown(hide_style, unsafe_allow_html=True)
 
-# ---------- CONFIG ----------
-DATABAZA_URL = st.secrets["DATABAZA_URL"]
-DATABAZA_KEY = st.secrets["DATABAZA_KEY"]
-ADMIN_PASS = st.secrets.get("ADMIN_PASS", "")  # nastav v secrets
-databaze: Client = create_client(DATABAZA_URL, DATABAZA_KEY)
+# ==============================
+# Automatický refresh
+# ==============================
+st_autorefresh = st.experimental_rerun
+st_autorefresh_count = st.experimental_get_query_params().get("refresh", [0])[0]
+st_autorefresh_count = int(st_autorefresh_count) + 1
+st.markdown(f"<meta http-equiv='refresh' content='30;url=?refresh={st_autorefresh_count}'>", unsafe_allow_html=True)
 
-# Pozície v dochádzke
-POSITIONS = [
-    "Veliteľ", "CCTV", "Brány",
-    "Sklad2", "Sklad3", "Turniket2",
-    "Turniket3", "Plombovac2", "Plombovac3"
-]
+# ==============================
+# Pripojenie k databáze
+# ==============================
+DATABAZA_URL = st.secrets.get("DATABAZA_URL")
+DATABAZA_KEY = st.secrets.get("DATABAZA_KEY")
+supabase: Client = create_client(DATABAZA_URL, DATABAZA_KEY)
 
-# Definícia časových rozsahov
-RANNA_START, RANNA_END = time(3, 0), time(14, 0)
-POOBEDNA_START, POOBEDNA_END = time(14, 0), time(23, 59)
+tz = pytz.timezone("Europe/Bratislava")
+today = datetime.now(tz).date()
+yesterday = today - timedelta(days=1)
 
-
-# =====================================
-# Funkcie
-# =====================================
-def get_today_data():
-    today = datetime.now().date()
-    tomorrow = today.replace(day=today.day + 1)
-    resp = supabase.table("dochadzka")\
-        .select("*")\
-        .gte("timestamp", str(today))\
-        .lt("timestamp", str(tomorrow))\
-        .execute()
-    df = pd.DataFrame(resp.data)
+# ==============================
+# Načítanie dát
+# ==============================
+@st.cache_data(ttl=20)
+def load_data():
+    res = supabase.table("attendance").select("*").execute()
+    df = pd.DataFrame(res.data)
     if df.empty:
-        return pd.DataFrame(columns=["user_code", "action", "timestamp", "position", "valid"])
+        return df
     df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["date"] = df["timestamp"].dt.date
     return df
 
+df = load_data()
 
-def analyze_shift(df, position, start, end):
-    """Vyhodnotí zmenu pre danú pozíciu"""
-    df_pos = df[df["position"] == position]
-    prichody = df_pos[df_pos["action"] == "Príchod"]["timestamp"].sort_values()
-    odchody = df_pos[df_pos["action"] == "Odchod"]["timestamp"].sort_values()
+if df.empty:
+    st.warning("⚠️ Žiadne dáta pre zobrazenie.")
+    st.stop()
 
-    # Filtrovanie podľa časového intervalu
-    prichody = prichody[(prichody.dt.time >= start) & (prichody.dt.time <= end)]
-    odchody = odchody[(odchody.dt.time >= start) & (odchody.dt.time <= end)]
+# ==============================
+# Spracovanie dát
+# ==============================
+def summarize_day(df_day):
+    records = []
+    for pos, group in df_day.groupby("position"):
+        arrivals = group[group["action"] == "Príchod"]
+        departures = group[group["action"] == "Odchod"]
 
-    if len(prichody) == 0:
-        return "❌ bez príchodu"
-    if len(odchody) == 0:
-        return f"⚠ {prichody.iloc[0].time()} - zabudnutý odchod"
-    return f"✅ {prichody.iloc[0].time()} - {odchody.iloc[-1].time()}"
+        pr_times = sorted(arrivals["timestamp"].dt.strftime("%H:%M").tolist())
+        od_times = sorted(departures["timestamp"].dt.strftime("%H:%M").tolist())
 
+        pr_display = ", ".join(pr_times) if pr_times else "—"
+        od_display = ", ".join(od_times) if od_times else "—"
 
-def summarize_day(df, date):
-    results = []
-    for pos in POSITIONS:
-        ranna = analyze_shift(df, pos, RANNA_START, RANNA_END)
-        poobedna = analyze_shift(df, pos, POOBEDNA_START, POOBEDNA_END)
-        results.append({"position": pos, "ranna": ranna, "poobedna": poobedna})
-    return pd.DataFrame(results)
+        if pr_times and od_times:
+            status = "🟢 OK"
+        elif pr_times or od_times:
+            status = "🟠 Chýba údaj"
+        else:
+            status = "🔴 Bez záznamu"
 
+        records.append({
+            "Pozícia": pos,
+            "Príchody": pr_display,
+            "Odchody": od_display,
+            "Stav": status
+        })
+    return pd.DataFrame(records)
 
-# =====================================
-# UI – Denný prehľad
-# =====================================
-today = datetime.now().strftime("%A %d.%m.%Y")
-st.title(f"🟢 Denný prehľad – {today}")
+# ==============================
+# Zobrazenie
+# ==============================
+tab1, tab2 = st.tabs([f"Dnes ({today.strftime('%d.%m.%Y')})", f"Včera ({yesterday.strftime('%d.%m.%Y')})"])
 
-df_today = get_today_data()
-df_summary = summarize_day(df_today, datetime.now().date())
+with tab1:
+    df_today = df[df["date"] == today]
+    if df_today.empty:
+        st.info("Žiadne záznamy pre dnešok.")
+    else:
+        summary_today = summarize_day(df_today)
+        st.dataframe(summary_today, use_container_width=True, hide_index=True)
 
-# Zobrazenie v 3x3 matici
-cols = st.columns(3)
-for idx, row in df_summary.iterrows():
-    with cols[idx % 3]:
-        st.subheader(row["position"])
-        st.write(f"Ranná: {row['ranna']}")
-        st.write(f"Poobedná: {row['poobedna']}")
-        st.markdown("---")
+with tab2:
+    df_yest = df[df["date"] == yesterday]
+    if df_yest.empty:
+        st.info("Žiadne záznamy pre včerajšok.")
+    else:
+        summary_yest = summarize_day(df_yest)
+        st.dataframe(summary_yest, use_container_width=True, hide_index=True)
+
+# ==============================
+# Poznámka o automatickom obnovení
+# ==============================
+st.caption("⏳ Dáta sa automaticky obnovujú každých 30 sekúnd.")
