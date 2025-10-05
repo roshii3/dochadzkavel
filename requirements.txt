@@ -1,10 +1,4 @@
-xlsxwriter
-
-
-streamlit==1.27.0
-pandas==2.1.1
-supabase==1.0.1
-openpyxl>=3.1.2
-python-dotenv
-pytz
-streamlitstreamlit
+streamlit==1.38.0
+pandas==2.2.2
+pytz==2024.1
+supabase==2.4.5
