@@ -48,10 +48,17 @@ def load_attendance(days_back=1):
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
 
     if not df["timestamp"].isna().all():
-        if df["timestamp"].dt.tz is None:
-            df["timestamp"] = df["timestamp"].dt.tz_localize(tz)
-        else:
-            df["timestamp"] = df["timestamp"].dt.tz_convert(tz)
+        try:
+            if df["timestamp"].dt.tz is None:
+                df["timestamp"] = df["timestamp"].dt.tz_localize(tz)
+            else:
+                df["timestamp"] = df["timestamp"].dt.tz_convert(tz)
+        except Exception:
+            df["timestamp"] = df["timestamp"].apply(
+                lambda x: tz.localize(x) if (pd.notna(x) and x.tzinfo is None)
+                else (x.tz_convert(tz) if pd.notna(x) else x)
+            )
+
         df["local_date"] = df["timestamp"].dt.date
         df["local_time"] = df["timestamp"].dt.strftime("%H:%M:%S")
     return df
@@ -75,8 +82,13 @@ def summarize_day(df_day):
 # ---------- UI ----------
 st.title("🕒 Veliteľ - Denný prehľad dochádzky")
 
+# Bezpečné obnovenie stránky
 if st.button("🔄 Obnoviť"):
-    st.experimental_rerun()
+    st.session_state["refresh"] = datetime.now().timestamp()
+
+# Aby sa znovu načítalo pri zmene refreshu
+if "refresh" not in st.session_state:
+    st.session_state["refresh"] = None
 
 df = load_attendance(days_back=1)
 
