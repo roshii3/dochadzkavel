@@ -8,7 +8,7 @@ from supabase import create_client, Client
 st.set_page_config(page_title="Veliteľ - Dochádzka", layout="wide")
 tz = pytz.timezone("Europe/Bratislava")
 
-# Skrytie menu Streamlit
+# Skrytie Streamlit menu
 hide_menu = """
     <style>
     #MainMenu {visibility: hidden;}
@@ -17,6 +17,25 @@ hide_menu = """
     </style>
 """
 st.markdown(hide_menu, unsafe_allow_html=True)
+
+# ---------- AUTENTIFIKÁCIA ----------
+def overenie_pristupu():
+    st.title("🔐 Prihlásenie - Veliteľ")
+
+    username = st.text_input("Používateľské meno:")
+    password = st.text_input("Heslo:", type="password")
+
+    if st.button("Prihlásiť sa"):
+        if username == "velitel" and password == "velitel123":  # môžeš zmeniť podľa potreby
+            st.session_state["velitel_prihlaseny"] = True
+            st.success("✅ Úspešne prihlásený!")
+            st.rerun()
+        else:
+            st.error("❌ Nesprávne meno alebo heslo")
+
+if "velitel_prihlaseny" not in st.session_state:
+    overenie_pristupu()
+    st.stop()
 
 # ---------- DATABASE ----------
 DATABAZA_URL = st.secrets.get("DATABAZA_URL")
@@ -29,9 +48,9 @@ POSITIONS = [
     "Turniket3", "Plombovac3"
 ]
 
-# ---------- HELPERS ----------
+# ---------- FUNKCIE ----------
 def load_attendance(days_back=1):
-    """Načíta dáta za dnešok a včerajšok"""
+    """Načíta dochádzku za dnešok a včerajšok"""
     now = datetime.now(tz)
     start = now - timedelta(days=days_back)
     end = now + timedelta(days=1)
@@ -44,9 +63,8 @@ def load_attendance(days_back=1):
     if df.empty:
         return df
 
-    # konverzia timestamp na datetime
+    # Konverzia času
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-
     if not df["timestamp"].isna().all():
         try:
             if df["timestamp"].dt.tz is None:
@@ -58,12 +76,12 @@ def load_attendance(days_back=1):
                 lambda x: tz.localize(x) if (pd.notna(x) and x.tzinfo is None)
                 else (x.tz_convert(tz) if pd.notna(x) else x)
             )
-
         df["local_date"] = df["timestamp"].dt.date
         df["local_time"] = df["timestamp"].dt.strftime("%H:%M:%S")
     return df
 
 def summarize_day(df_day):
+    """Vytvorí prehľad podľa pozícií"""
     summary = {}
     for pos in POSITIONS:
         pos_df = df_day[df_day["position"] == pos]
@@ -82,11 +100,10 @@ def summarize_day(df_day):
 # ---------- UI ----------
 st.title("🕒 Veliteľ - Denný prehľad dochádzky")
 
-# Bezpečné obnovenie stránky
+# Tlačidlo obnoviť (bez chýb)
 if st.button("🔄 Obnoviť"):
     st.session_state["refresh"] = datetime.now().timestamp()
 
-# Aby sa znovu načítalo pri zmene refreshu
 if "refresh" not in st.session_state:
     st.session_state["refresh"] = None
 
