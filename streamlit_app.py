@@ -1,4 +1,3 @@
-# streamlit_velitel.py
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -25,9 +24,9 @@ DATABAZA_KEY = st.secrets.get("DATABAZA_KEY")
 databaza: Client = create_client(DATABAZA_URL, DATABAZA_KEY)
 
 POSITIONS = [
-    "Veliteľ","CCTV","Brány","Sklad2",
-    "Turniket2","Plombovac2","Sklad3",
-    "Turniket3","Plombovac3"
+    "Veliteľ", "CCTV", "Brány", "Sklad2",
+    "Turniket2", "Plombovac2", "Sklad3",
+    "Turniket3", "Plombovac3"
 ]
 
 # ---------- HELPERS ----------
@@ -54,7 +53,7 @@ def load_attendance(days_back=1):
         else:
             df["timestamp"] = df["timestamp"].dt.tz_convert(tz)
         df["local_date"] = df["timestamp"].dt.date
-        df["local_time"] = df["timestamp"].dt.time
+        df["local_time"] = df["timestamp"].dt.strftime("%H:%M:%S")
     return df
 
 def summarize_day(df_day):
@@ -67,7 +66,6 @@ def summarize_day(df_day):
         records = []
         for _, row in pos_df.iterrows():
             records.append({
-                "user_code": row.get("user_code"),
                 "action": row.get("action"),
                 "time": row.get("local_time")
             })
@@ -95,6 +93,6 @@ else:
             st.info("Žiadne záznamy")
         else:
             for rec in records:
-                
-                time_str = rec["time"].strftime("%H:%M:%S") if rec["time"] else "NaT"
-                st.write(f"{user} | {rec['action']} | {time_str}")
+                time_str = rec["time"] or "NaT"
+                action_emoji = "✅" if rec["action"] == "Príchod" else "🚪"
+                st.write(f"{action_emoji} {rec['action']} — {time_str}")
