@@ -95,6 +95,6 @@ else:
             st.info("Žiadne záznamy")
         else:
             for rec in records:
-                user = rec["user_code"] or "—"
+                
                 time_str = rec["time"].strftime("%H:%M:%S") if rec["time"] else "NaT"
                 st.write(f"{user} | {rec['action']} | {time_str}")
