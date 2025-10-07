@@ -22,11 +22,14 @@ st.markdown(hide_menu, unsafe_allow_html=True)
 def overenie_pristupu():
     st.title("🔐 Prihlásenie - Veliteľ")
 
-    username = st.text_input("Používateľské meno:")
-    password = st.text_input("Heslo:", type="password")
+    username_input = st.text_input("Používateľské meno:")
+    password_input = st.text_input("Heslo:", type="password")
+
+    velitel_username = st.secrets["VELITEL_USERNAME"]
+    velitel_password = st.secrets["VELITEL_PASSWORD"]
 
     if st.button("Prihlásiť sa"):
-        if username == "velitel" and password == "velitel123":  # môžeš zmeniť podľa potreby
+        if username_input == velitel_username and password_input == velitel_password:
             st.session_state["velitel_prihlaseny"] = True
             st.success("✅ Úspešne prihlásený!")
             st.rerun()
@@ -38,8 +41,8 @@ if "velitel_prihlaseny" not in st.session_state:
     st.stop()
 
 # ---------- DATABASE ----------
-DATABAZA_URL = st.secrets.get("DATABAZA_URL")
-DATABAZA_KEY = st.secrets.get("DATABAZA_KEY")
+DATABAZA_URL = st.secrets["DATABAZA_URL"]
+DATABAZA_KEY = st.secrets["DATABAZA_KEY"]
 databaza: Client = create_client(DATABAZA_URL, DATABAZA_KEY)
 
 POSITIONS = [
@@ -100,7 +103,7 @@ def summarize_day(df_day):
 # ---------- UI ----------
 st.title("🕒 Veliteľ - Denný prehľad dochádzky")
 
-# Tlačidlo obnoviť (bez chýb)
+# Tlačidlo obnoviť
 if st.button("🔄 Obnoviť"):
     st.session_state["refresh"] = datetime.now().timestamp()
 
