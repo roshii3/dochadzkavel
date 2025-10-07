@@ -1,130 +1,117 @@
+# streamlit_velitel_prehľad.py
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import pytz
 from supabase import create_client, Client
+from pathlib import Path
 
-# ---------- CONFIG ----------
-st.set_page_config(page_title="Veliteľ - Dochádzka", layout="wide")
-tz = pytz.timezone("Europe/Bratislava")
+# ========== ZÁKLADNÉ NASTAVENIE ==========
+st.set_page_config(page_title="Prehľad dochádzky — Veliteľ", layout="wide")
 
-# Skrytie Streamlit menu
-hide_menu = """
+hide_st_style = """
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     </style>
 """
-st.markdown(hide_menu, unsafe_allow_html=True)
+st.markdown(hide_st_style, unsafe_allow_html=True)
 
-# ---------- AUTENTIFIKÁCIA ----------
-def overenie_pristupu():
-    st.title("🔐 Prihlásenie - Veliteľ")
-
-    username_input = st.text_input("Používateľské meno:")
-    password_input = st.text_input("Heslo:", type="password")
-
-    velitel_username = st.secrets["VELITEL_USERNAME"]
-    velitel_password = st.secrets["VELITEL_PASSWORD"]
-
-    if st.button("Prihlásiť sa"):
-        if username_input == velitel_username and password_input == velitel_password:
-            st.session_state["velitel_prihlaseny"] = True
-            st.success("✅ Úspešne prihlásený!")
-            st.rerun()
-        else:
-            st.error("❌ Nesprávne meno alebo heslo")
-
-if "velitel_prihlaseny" not in st.session_state:
-    overenie_pristupu()
-    st.stop()
-
-# ---------- DATABASE ----------
+# ========== DATABÁZA ==========
 DATABAZA_URL = st.secrets["DATABAZA_URL"]
 DATABAZA_KEY = st.secrets["DATABAZA_KEY"]
+VELITEL_PASS = st.secrets.get("VELITEL_PASS", "")
+
 databaza: Client = create_client(DATABAZA_URL, DATABAZA_KEY)
+tz = pytz.timezone("Europe/Bratislava")
 
-POSITIONS = [
-    "Veliteľ", "CCTV", "Brány", "Sklad2",
-    "Turniket2", "Plombovac2", "Sklad3",
-    "Turniket3", "Plombovac3"
-]
+# ========== AUTORIZÁCIA ==========
+app_dir = Path.home() / ".velitel_app"
+app_dir.mkdir(parents=True, exist_ok=True)
+AUTH_FILE = app_dir / "velitel_auth.txt"
 
-# ---------- FUNKCIE ----------
-def load_attendance(days_back=1):
-    """Načíta dochádzku za dnešok a včerajšok"""
-    now = datetime.now(tz)
-    start = now - timedelta(days=days_back)
-    end = now + timedelta(days=1)
+def uloz_autorizaciu():
+    with open(AUTH_FILE, "w") as f:
+        f.write("OK")
 
+def je_autorizovany():
+    return AUTH_FILE.exists()
+
+def odhlas_sa():
+    if AUTH_FILE.exists():
+        AUTH_FILE.unlink()
+    st.session_state.velitel_logged = False
+    st.experimental_rerun()
+
+# Inicializácia stavu
+if "velitel_logged" not in st.session_state:
+    st.session_state.velitel_logged = je_autorizovany()
+
+# Login logika
+if not st.session_state.velitel_logged:
+    st.title("🔐 Prihlásenie veliteľa")
+    pw = st.text_input("Zadaj heslo", type="password")
+    if st.button("Prihlásiť sa"):
+        if VELITEL_PASS and pw == VELITEL_PASS:
+            uloz_autorizaciu()
+            st.session_state.velitel_logged = True
+            st.success("✅ Prihlásenie úspešné")
+            st.experimental_rerun()
+        else:
+            st.error("❌ Nesprávne heslo.")
+    st.stop()
+
+# ========== HLAVNÝ OBSAH ==========
+st.title("📋 Prehľad dochádzky — Veliteľ")
+if st.button("🚪 Odhlásiť sa"):
+    odhlas_sa()
+
+if st.button("🔄 Obnoviť dáta"):
+    st.experimental_rerun()
+
+# ========== FUNKCIE ==========
+def nacitaj_data():
+    dnes = datetime.now(tz).date()
+    vcera = dnes - timedelta(days=1)
+    start = tz.localize(datetime.combine(vcera, datetime.min.time()))
+    end = tz.localize(datetime.combine(dnes + timedelta(days=1), datetime.min.time()))
+    
     res = databaza.table("attendance").select("*")\
         .gte("timestamp", start.isoformat())\
-        .lt("timestamp", end.isoformat()).execute()
-    
+        .lt("timestamp", end.isoformat())\
+        .execute()
+
     df = pd.DataFrame(res.data)
     if df.empty:
         return df
 
-    # Konverzia času
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    if not df["timestamp"].isna().all():
-        try:
-            if df["timestamp"].dt.tz is None:
-                df["timestamp"] = df["timestamp"].dt.tz_localize(tz)
-            else:
-                df["timestamp"] = df["timestamp"].dt.tz_convert(tz)
-        except Exception:
-            df["timestamp"] = df["timestamp"].apply(
-                lambda x: tz.localize(x) if (pd.notna(x) and x.tzinfo is None)
-                else (x.tz_convert(tz) if pd.notna(x) else x)
-            )
-        df["local_date"] = df["timestamp"].dt.date
-        df["local_time"] = df["timestamp"].dt.strftime("%H:%M:%S")
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True).dt.tz_convert("Europe/Bratislava")
+    df["date"] = df["timestamp"].dt.date
+    df["time"] = df["timestamp"].dt.strftime("%H:%M:%S")
+
+    df = df.sort_values(["date", "position", "timestamp"])
     return df
 
-def summarize_day(df_day):
-    """Vytvorí prehľad podľa pozícií"""
-    summary = {}
-    for pos in POSITIONS:
-        pos_df = df_day[df_day["position"] == pos]
-        if pos_df.empty:
-            summary[pos] = []
-            continue
-        records = []
-        for _, row in pos_df.iterrows():
-            records.append({
-                "action": row.get("action"),
-                "time": row.get("local_time")
-            })
-        summary[pos] = records
-    return summary
+# ========== ZOBRAZENIE ==========
+data = nacitaj_data()
 
-# ---------- UI ----------
-st.title("🕒 Veliteľ - Denný prehľad dochádzky")
-
-# Tlačidlo obnoviť
-if st.button("🔄 Obnoviť"):
-    st.session_state["refresh"] = datetime.now().timestamp()
-
-if "refresh" not in st.session_state:
-    st.session_state["refresh"] = None
-
-df = load_attendance(days_back=1)
-
-if df.empty:
-    st.warning("⚠️ Žiadne záznamy za dnešok ani včerajšok.")
+if data.empty:
+    st.warning("Žiadne dáta za dnešok a včerajšok.")
 else:
-    st.subheader("Prehľad za dnešok a včerajšok")
-    summary = summarize_day(df)
+    for day in sorted(data["date"].unique(), reverse=True):
+        st.subheader(f"📅 {day.strftime('%A %d.%m.%Y')}")
+        day_df = data[data["date"] == day]
 
-    for pos in POSITIONS:
-        st.markdown(f"### {pos}")
-        records = summary.get(pos, [])
-        if not records:
-            st.info("Žiadne záznamy")
-        else:
-            for rec in records:
-                time_str = rec["time"] or "NaT"
-                action_emoji = "✅" if rec["action"] == "Príchod" else "🚪"
-                st.write(f"{action_emoji} {rec['action']} — {time_str}")
+        for pos in sorted(day_df["position"].unique()):
+            pos_df = day_df[day_df["position"] == pos]
+            st.markdown(f"### 🔹 {pos}")
+
+            records = []
+            for _, r in pos_df.iterrows():
+                records.append({
+                    "Čas": r["time"],
+                    "Akcia": r["action"],
+                })
+            df_view = pd.DataFrame(records)
+            st.dataframe(df_view, use_container_width=True)
