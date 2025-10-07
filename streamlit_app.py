@@ -34,7 +34,6 @@ if not st.session_state.velitel_logged:
     if st.button("Prihlásiť"):
         if password == VELITEL_PASS:
             st.session_state.velitel_logged = True
-            st.experimental_rerun = lambda: None  # bezpečne nahradíme rerun
         else:
             st.error("Nesprávne heslo.")
     st.stop()
@@ -54,6 +53,7 @@ def load_attendance(start_dt, end_dt):
 
 # ---------- ZOBRAZENIE DÁT ----------
 st.title("🕒 Prehľad dochádzky - Veliteľ")
+
 today = datetime.now(tz).date()
 yesterday = today - timedelta(days=1)
 start_dt = tz.localize(datetime.combine(yesterday, datetime.min.time()))
