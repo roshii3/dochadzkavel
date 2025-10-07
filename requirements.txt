@@ -2,5 +2,5 @@
 streamlit==1.26.0
 pandas==2.1.0
 pytz==2025.7
-supabase==1.0.0
+supabase-py==1.0.0
 openpyxl==3.1.2
