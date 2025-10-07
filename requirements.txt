@@ -1,6 +1,7 @@
 
-streamlit
-pandas
-pytz
-supabase
-streamlit-autorefresh
+
+streamlit==1.38.0
+pandas==2.2.2
+pytz==2024.1
+supabase==2.5.1
+python-dotenv==1.0.1
