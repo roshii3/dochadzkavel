@@ -1,139 +1,100 @@
+# streamlit_velitel.py
 import streamlit as st
 import pandas as pd
-import psycopg2
 from datetime import datetime, timedelta
-from pytz import timezone
+import pytz
+from supabase import create_client, Client
 
-# =============================
-# 🔐 PRIHLÁSENIE CEZ SECRETS
-# =============================
+# ---------- CONFIG ----------
+st.set_page_config(page_title="Veliteľ - Dochádzka", layout="wide")
+
+# Skrytie menu a footeru
+st.markdown("""
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    </style>
+""", unsafe_allow_html=True)
+
+# ---------- DATABASE ----------
+DATABAZA_URL = st.secrets.get("DATABAZA_URL")
+DATABAZA_KEY = st.secrets.get("DATABAZA_KEY")
+VELITEL_PASSWORD = st.secrets.get("velitel_password")
+databaza: Client = create_client(DATABAZA_URL, DATABAZA_KEY)
+tz = pytz.timezone("Europe/Bratislava")
+
+POSITIONS = [
+    "Veliteľ","CCTV","Brány","Sklad2",
+    "Turniket2","Plombovac2","Sklad3",
+    "Turniket3","Plombovac3"
+]
+
+# ---------- LOGIN ----------
+if "velitel_logged" not in st.session_state:
+    st.session_state.velitel_logged = False
+
 def prihlasenie():
-    if "authenticated" not in st.session_state:
-        st.session_state["authenticated"] = False
-
-    if not st.session_state["authenticated"]:
-        st.title("🔒 Prihlásenie - Veliteľ")
-
-        password = st.text_input("Zadaj heslo:", type="password")
-
+    if not st.session_state.velitel_logged:
+        st.subheader("🔐 Prihlásenie veliteľa")
+        password = st.text_input("Heslo", type="password")
         if st.button("Prihlásiť"):
-            if password == st.secrets["velitel_password"]:
-                st.session_state["authenticated"] = True
-                st.success("✅ Úspešne prihlásený!")
-                st.rerun()
+            if password == VELITEL_PASSWORD:
+                st.session_state.velitel_logged = True
+                st.experimental_rerun()
             else:
-                st.error("❌ Nesprávne heslo.")
-        st.stop()
+                st.error("❌ Nesprávne heslo")
 
+prihlasenie()
+if not st.session_state.velitel_logged:
+    st.stop()
 
-# =============================
-# 🔗 PRIPOJENIE K DATABÁZE
-# =============================
-def get_connection():
-    conn = psycopg2.connect(
-        host=st.secrets["connections"]["postgres"]["host"],
-        dbname=st.secrets["connections"]["postgres"]["dbname"],
-        user=st.secrets["connections"]["postgres"]["user"],
-        password=st.secrets["connections"]["postgres"]["password"],
-        port=st.secrets["connections"]["postgres"]["port"],
-        sslmode="require"
-    )
-    return conn
-
-
-# =============================
-# 📥 NAČÍTANIE DÁT
-# =============================
+# ---------- DATA ----------
 def nacitaj_data():
-    conn = get_connection()
-    query = """
-        SELECT position_name, timestamp, event_type
-        FROM dochadzka
-        ORDER BY timestamp DESC;
-    """
-    df = pd.read_sql(query, conn)
-    conn.close()
-
-    # časové pásmo
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-    df["local_time"] = df["timestamp"].dt.tz_convert("Europe/Bratislava")
-    df["local_date"] = df["local_time"].dt.date
-
+    today = datetime.now(tz).date()
+    yesterday = today - timedelta(days=1)
+    start_dt = tz.localize(datetime.combine(yesterday, datetime.min.time()))
+    end_dt = tz.localize(datetime.combine(today, datetime.max.time()))
+    
+    res = databaza.table("attendance").select("*")\
+        .gte("timestamp", start_dt.isoformat())\
+        .lte("timestamp", end_dt.isoformat())\
+        .execute()
+    df = pd.DataFrame(res.data)
+    if df.empty:
+        return df
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df["timestamp"] = df["timestamp"].apply(
+        lambda x: tz.localize(x) if pd.notna(x) and x.tzinfo is None else (x.tz_convert(tz) if pd.notna(x) else x)
+    )
+    df["local_date"] = df["timestamp"].dt.date
     return df
 
+# ---------- UI ----------
+st.title("🕒 Veliteľ - Denný prehľad dochádzky")
 
-# =============================
-# 🧮 SPRACOVANIE PREHĽADU
-# =============================
-def priprav_prehľad(df):
-    dnes = datetime.now(timezone("Europe/Bratislava")).date()
-    vcera = dnes - timedelta(days=1)
+if st.button("🔄 Obnoviť"):
+    st.experimental_rerun()
 
-    df = df[df["local_date"].isin([dnes, vcera])]
+data = nacitaj_data()
+if data.empty:
+    st.warning("⚠️ Nie sú dostupné žiadne údaje za dnešok ani včerajšok")
+    st.stop()
 
-    prehlad = {}
+for pos in POSITIONS:
+    st.subheader(f"📌 {pos}")
+    pos_df = data[data["position"] == pos].sort_values("timestamp")
+    if pos_df.empty:
+        st.write("— žiadne záznamy —")
+        continue
 
-    for pos, group in df.groupby("position_name"):
-        zaznamy = group.sort_values("local_time")
-
-        prichody = zaznamy[zaznamy["event_type"] == "prichod"]["local_time"].tolist()
-        odchody = zaznamy[zaznamy["event_type"] == "odchod"]["local_time"].tolist()
-
-        prehlad[pos] = {"prichody": prichody, "odchody": odchody}
-
-    return prehlad, dnes, vcera
-
-
-# =============================
-# 🎨 ZOBRAZENIE PREHĽADU
-# =============================
-def zobraz_prehľad(prehlad, dnes, vcera):
-    st.title("📋 Denný prehľad dochádzky")
-
-    for pos, data in sorted(prehlad.items()):
-        st.markdown(f"### 🏷️ {pos}")
-
-        # prichody
-        if len(data["prichody"]) == 0 and len(data["odchody"]) == 0:
-            st.warning("Žiadne dáta za dnešok ani včerajšok.")
-            continue
-
-        # zobrazenie časov
-        if len(data["prichody"]) > 0:
-            st.write("**Príchody:**")
-            for t in data["prichody"]:
-                st.markdown(f"- 🟢 {t.strftime('%Y-%m-%d %H:%M:%S')}")
-        else:
-            st.markdown("- ⚠️ Žiadny príchod")
-
-        if len(data["odchody"]) > 0:
-            st.write("**Odchody:**")
-            for t in data["odchody"]:
-                st.markdown(f"- 🔴 {t.strftime('%Y-%m-%d %H:%M:%S')}")
-        else:
-            st.markdown("- ⚠️ Žiadny odchod")
-
-        st.divider()
-
-
-# =============================
-# 🔄 HLAVNÁ APLIKÁCIA
-# =============================
-def main():
-    prihlasenie()
-
-    # Tlačidlo Obnoviť (bez chýb)
-    if "refresh" not in st.session_state:
-        st.session_state["refresh"] = 0
-
-    if st.button("🔄 Obnoviť"):
-        st.session_state["refresh"] += 1
-
-    if st.session_state["refresh"] >= 0:
-        df = nacitaj_data()
-        prehlad, dnes, vcera = priprav_prehľad(df)
-        zobraz_prehľad(prehlad, dnes, vcera)
-
-
-if __name__ == "__main__":
-    main()
+    table = []
+    for _, row in pos_df.iterrows():
+        table.append({
+            "Dátum": row["local_date"],
+            "Akcia": row["action"],
+            "Čas": row["timestamp"].strftime("%H:%M:%S"),
+            "Status": "Platný" if row.get("valid", True) else "Mimo času"
+        })
+    df_table = pd.DataFrame(table)
+    st.dataframe(df_table, use_container_width=True)
