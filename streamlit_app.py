@@ -1,14 +1,13 @@
 # streamlit_velitel.py
 import streamlit as st
-import pandas as pd
 from datetime import datetime, timedelta
 import pytz
 from supabase import create_client, Client
+import pandas as pd
 
-# ---------- CONFIG ----------
 st.set_page_config(page_title="Veliteľ - Dochádzka", layout="wide")
 
-# Skrytie menu a footeru
+# Skryť menu a footer
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
@@ -17,84 +16,71 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ---------- DATABASE ----------
+# ---------------- CONFIG ----------------
 DATABAZA_URL = st.secrets.get("DATABAZA_URL")
 DATABAZA_KEY = st.secrets.get("DATABAZA_KEY")
 VELITEL_PASSWORD = st.secrets.get("velitel_password")
 databaza: Client = create_client(DATABAZA_URL, DATABAZA_KEY)
+
 tz = pytz.timezone("Europe/Bratislava")
+POSITIONS = ["Veliteľ","CCTV","Brány","Sklad2","Sklad3","Turniket2","Turniket3","Plombovac2","Plombovac3"]
 
-POSITIONS = [
-    "Veliteľ","CCTV","Brány","Sklad2",
-    "Turniket2","Plombovac2","Sklad3",
-    "Turniket3","Plombovac3"
-]
-
-# ---------- LOGIN ----------
-if "velitel_logged" not in st.session_state:
-    st.session_state.velitel_logged = False
-
+# ---------------- Funkcie ----------------
 def prihlasenie():
-    if not st.session_state.velitel_logged:
-        st.subheader("🔐 Prihlásenie veliteľa")
-        password = st.text_input("Heslo", type="password")
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+    if not st.session_state.logged_in:
+        pw = st.text_input("Heslo veliteľa", type="password")
         if st.button("Prihlásiť"):
-            if password == VELITEL_PASSWORD:
-                st.session_state.velitel_logged = True
+            if pw == VELITEL_PASSWORD:
+                st.session_state.logged_in = True
                 st.experimental_rerun()
             else:
-                st.error("❌ Nesprávne heslo")
+                st.error("Nesprávne heslo!")
+        st.stop()
 
-prihlasenie()
-if not st.session_state.velitel_logged:
-    st.stop()
-
-# ---------- DATA ----------
 def nacitaj_data():
     today = datetime.now(tz).date()
     yesterday = today - timedelta(days=1)
-    start_dt = tz.localize(datetime.combine(yesterday, datetime.min.time()))
-    end_dt = tz.localize(datetime.combine(today, datetime.max.time()))
-    
+    start_dt = datetime.combine(yesterday, datetime.min.time()).astimezone(tz)
+    end_dt = datetime.combine(today, datetime.max.time()).astimezone(tz)
+
     res = databaza.table("attendance").select("*")\
         .gte("timestamp", start_dt.isoformat())\
         .lte("timestamp", end_dt.isoformat())\
         .execute()
     df = pd.DataFrame(res.data)
     if df.empty:
-        return df
+        return pd.DataFrame(columns=["position","action","timestamp"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    df["timestamp"] = df["timestamp"].apply(
-        lambda x: tz.localize(x) if pd.notna(x) and x.tzinfo is None else (x.tz_convert(tz) if pd.notna(x) else x)
-    )
+    df["timestamp"] = df["timestamp"].apply(lambda x: x.tz_convert(tz) if pd.notna(x) and x.tzinfo else x)
     df["local_date"] = df["timestamp"].dt.date
     return df
 
-# ---------- UI ----------
-st.title("🕒 Veliteľ - Denný prehľad dochádzky")
+def summary_table(df):
+    data = []
+    for pos in POSITIONS:
+        pos_df = df[df["position"] == pos]
+        for d in sorted(pos_df["local_date"].unique(), reverse=True):
+            day_df = pos_df[pos_df["local_date"] == d]
+            arrivals = day_df[day_df["action"]=="Príchod"]["timestamp"].dt.strftime("%H:%M:%S").tolist()
+            departures = day_df[day_df["action"]=="Odchod"]["timestamp"].dt.strftime("%H:%M:%S").tolist()
+            data.append({
+                "Pozícia": pos,
+                "Dátum": d,
+                "Príchody": ", ".join(arrivals) if arrivals else "—",
+                "Odchody": ", ".join(departures) if departures else "—"
+            })
+    return pd.DataFrame(data)
 
-if st.button("🔄 Obnoviť"):
-    st.experimental_rerun()
+# ---------------- Hlavný blok ----------------
+prihlasenie()
+st.title("🕒 Dochádzka - Veliteľ")
 
-data = nacitaj_data()
-if data.empty:
-    st.warning("⚠️ Nie sú dostupné žiadne údaje za dnešok ani včerajšok")
-    st.stop()
-
-for pos in POSITIONS:
-    st.subheader(f"📌 {pos}")
-    pos_df = data[data["position"] == pos].sort_values("timestamp")
-    if pos_df.empty:
-        st.write("— žiadne záznamy —")
-        continue
-
-    table = []
-    for _, row in pos_df.iterrows():
-        table.append({
-            "Dátum": row["local_date"],
-            "Akcia": row["action"],
-            "Čas": row["timestamp"].strftime("%H:%M:%S"),
-            "Status": "Platný" if row.get("valid", True) else "Mimo času"
-        })
-    df_table = pd.DataFrame(table)
+df = nacitaj_data()
+if df.empty:
+    st.warning("⚠ Dáta nie sú dostupné pre dnešok ani včerajšok.")
+else:
+    st.subheader("📋 Prehľad príchodov a odchodov (dnešok + včerajšok)")
+    df_table = summary_table(df)
     st.dataframe(df_table, use_container_width=True)
