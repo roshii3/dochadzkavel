@@ -1,7 +1,7 @@
-# streamlit_velitel_clean.py
+# streamlit_velitel.py
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import pytz
 from supabase import create_client, Client
 
@@ -49,28 +49,41 @@ def load_attendance(start_dt, end_dt):
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["timestamp"] = df["timestamp"].apply(lambda x: tz.localize(x) if pd.notna(x) and x.tzinfo is None else x)
     df["date"] = df["timestamp"].dt.date
+    df["time"] = df["timestamp"].dt.time
     return df
 
-# ---------- GENEROVANIE ZOBRAZENIA ----------
-def generate_attendance_display(df_day):
-    display_data = {}
-    for pos in POSITIONS:
-        pos_df = df_day[df_day["position"] == pos].sort_values("timestamp")
-        entries = []
-        for _, row in pos_df.iterrows():
-            entries.append({
-                "Príchod" if row["action"]=="Príchod" else "Odchod": row["timestamp"].strftime("%H:%M")
-            })
-        display_data[pos] = entries
-    return display_data
+# ---------- ZOBRAZENIE DÁT ----------
+def get_user_pairs(pos_day_df: pd.DataFrame):
+    """Vytvorí páry príchod/odchod pre každého používateľa"""
+    pairs = []
+    if pos_day_df.empty:
+        return pairs
+    prichody = pos_day_df[pos_day_df["action"].str.lower() == "príchod"].sort_values("timestamp")
+    odchody = pos_day_df[pos_day_df["action"].str.lower() == "odchod"].sort_values("timestamp")
+    
+    # Spárovanie príchod / odchod
+    od_index = 0
+    for idx, pr_row in prichody.iterrows():
+        od_row = None
+        while od_index < len(odchody):
+            candidate = odchody.iloc[od_index]
+            if candidate.timestamp > pr_row.timestamp:
+                od_row = candidate
+                od_index += 1
+                break
+            od_index += 1
+        pairs.append({"pr": pr_row.timestamp, "od": od_row.timestamp if od_row is not None else None})
+    # zostávajúce odchody bez príchodu
+    for j in range(od_index, len(odchody)):
+        pairs.append({"pr": None, "od": odchody.iloc[j].timestamp})
+    return pairs
 
-# ---------- ZOBRAZENIE ----------
 st.title("🕒 Prehľad dochádzky - Veliteľ")
 
 today = datetime.now(tz).date()
 yesterday = today - timedelta(days=1)
-start_dt = tz.localize(datetime.combine(yesterday, datetime.min.time()))
-end_dt = tz.localize(datetime.combine(today + timedelta(days=1), datetime.min.time()))
+start_dt = tz.localize(datetime.combine(yesterday, time.min))
+end_dt = tz.localize(datetime.combine(today + timedelta(days=1), time.min))
 df = load_attendance(start_dt, end_dt)
 
 if df.empty:
@@ -82,13 +95,14 @@ else:
         if df_day.empty:
             st.write("— žiadne záznamy —")
             continue
-        display_data = generate_attendance_display(df_day)
-        for pos, entries in display_data.items():
+        for pos in POSITIONS:
+            pos_df = df_day[df_day["position"] == pos]
             st.markdown(f"**{pos}**")
-            if not entries:
+            if pos_df.empty:
                 st.write("— žiadne záznamy —")
                 continue
-            for e in entries:
-                prichod = e.get("Príchod", "—")
-                odchod = e.get("Odchod", "—")
-                st.write(f"➡️ Príchod: {prichod} | Odchod: {odchod}")
+            pairs = get_user_pairs(pos_df)
+            for p in pairs:
+                pr_str = p["pr"].strftime("%H:%M") if p["pr"] else "—"
+                od_str = p["od"].strftime("%H:%M") if p["od"] else "—"
+                st.write(f"➡️ Príchod: {pr_str} | Odchod: {od_str}")
