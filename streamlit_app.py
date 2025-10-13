@@ -1,10 +1,11 @@
-# streamlit_velitel_full.py
+# streamlit_velitel_clean.py
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import pytz
 from supabase import create_client, Client
 
+# ---------- CONFIG ----------
 st.set_page_config(page_title="Veliteľ - Dochádzka", layout="wide")
 hide_st_style = """
     <style>
@@ -24,7 +25,7 @@ tz = pytz.timezone("Europe/Bratislava")
 
 POSITIONS = ["Veliteľ","CCTV","Brány","Sklad2","Sklad3","Turniket2","Turniket3","Plombovac2","Plombovac3"]
 
-# ---------- LOGIN ----------
+# ---------- OVERENIE PRIHLASENIA ----------
 if "velitel_logged" not in st.session_state:
     st.session_state.velitel_logged = False
 
@@ -48,39 +49,22 @@ def load_attendance(start_dt, end_dt):
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["timestamp"] = df["timestamp"].apply(lambda x: tz.localize(x) if pd.notna(x) and x.tzinfo is None else x)
     df["date"] = df["timestamp"].dt.date
-    df["time"] = df["timestamp"].dt.time
-    df = df.sort_values("timestamp")
     return df
 
-# ---------- GENEROVANIE PÁROV ----------
-def generate_pairs(pos_df):
-    """
-    Generuje zoznam príchod/odchod párov.
-    Zachováva všetky záznamy, aj nesparované.
-    """
-    pos_df = pos_df.sort_values("timestamp")
-    pairs = []
-    buffer_prichod = []
+# ---------- GENEROVANIE ZOBRAZENIA ----------
+def generate_attendance_display(df_day):
+    display_data = {}
+    for pos in POSITIONS:
+        pos_df = df_day[df_day["position"] == pos].sort_values("timestamp")
+        entries = []
+        for _, row in pos_df.iterrows():
+            entries.append({
+                "Príchod" if row["action"]=="Príchod" else "Odchod": row["timestamp"].strftime("%H:%M")
+            })
+        display_data[pos] = entries
+    return display_data
 
-    for _, row in pos_df.iterrows():
-        action = row["action"].lower()
-        ts = row["timestamp"]
-        if action == "príchod":
-            buffer_prichod.append(ts)
-        elif action == "odchod":
-            if buffer_prichod:
-                pr = buffer_prichod.pop(0)
-                pairs.append({"prichod": pr, "odchod": ts})
-            else:
-                pairs.append({"prichod": None, "odchod": ts})
-
-    # zostali príchody bez odchodov
-    for pr in buffer_prichod:
-        pairs.append({"prichod": pr, "odchod": None})
-
-    return pairs
-
-# ---------- ZOBRAZENIE DÁT ----------
+# ---------- ZOBRAZENIE ----------
 st.title("🕒 Prehľad dochádzky - Veliteľ")
 
 today = datetime.now(tz).date()
@@ -98,14 +82,13 @@ else:
         if df_day.empty:
             st.write("— žiadne záznamy —")
             continue
-        for pos in POSITIONS:
+        display_data = generate_attendance_display(df_day)
+        for pos, entries in display_data.items():
             st.markdown(f"**{pos}**")
-            pos_df = df_day[df_day["position"] == pos]
-            if pos_df.empty:
+            if not entries:
                 st.write("— žiadne záznamy —")
                 continue
-            pairs = generate_pairs(pos_df)
-            for pair in pairs:
-                pr_text = pair["prichod"].strftime("%H:%M") if pair["prichod"] else "—"
-                od_text = pair["odchod"].strftime("%H:%M") if pair["odchod"] else "—"
-                st.write(f"➡️ Príchod: {pr_text} | Odchod: {od_text}")
+            for e in entries:
+                prichod = e.get("Príchod", "—")
+                odchod = e.get("Odchod", "—")
+                st.write(f"➡️ Príchod: {prichod} | Odchod: {odchod}")
