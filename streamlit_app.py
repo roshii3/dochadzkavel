@@ -1,4 +1,4 @@
-# streamlit_velitel.py
+# streamlit_velitel_full.py
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, time
@@ -7,14 +7,13 @@ from supabase import create_client, Client
 
 # ---------- CONFIG ----------
 st.set_page_config(page_title="Veliteľ - Dochádzka", layout="wide")
-hide_st_style = """
+st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     </style>
-"""
-st.markdown(hide_st_style, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
 # ---------- DB ----------
 DATABAZA_URL = st.secrets["DATABAZA_URL"]
@@ -25,7 +24,7 @@ tz = pytz.timezone("Europe/Bratislava")
 
 POSITIONS = ["Veliteľ","CCTV","Brány","Sklad2","Sklad3","Turniket2","Turniket3","Plombovac2","Plombovac3"]
 
-# ---------- OVERENIE PRIHLASENIA ----------
+# ---------- LOGIN ----------
 if "velitel_logged" not in st.session_state:
     st.session_state.velitel_logged = False
 
@@ -49,46 +48,29 @@ def load_attendance(start_dt, end_dt):
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["timestamp"] = df["timestamp"].apply(lambda x: tz.localize(x) if pd.notna(x) and x.tzinfo is None else x)
     df["date"] = df["timestamp"].dt.date
-    df["time"] = df["timestamp"].dt.time
     return df
 
+# ---------- VYPIS VSETKYCH ZAZNAMOV ----------
+def all_entries(pos_df: pd.DataFrame):
+    """
+    Vráti všetky príchody a odchody pre pozíciu, chronologicky.
+    """
+    if pos_df.empty:
+        return []
+    df_sorted = pos_df.sort_values("timestamp")
+    entries = []
+    for _, row in df_sorted.iterrows():
+        ts_str = row["timestamp"].strftime("%H:%M") if pd.notna(row["timestamp"]) else "—"
+        entries.append(f"➡️ {row['action']}: {ts_str}")
+    return entries
+
 # ---------- ZOBRAZENIE DÁT ----------
-def get_user_pairs(pos_day_df: pd.DataFrame):
-    """Vytvorí páry príchod/odchod pre každého používateľa, vrátane nesparovaných odchodov/príchodov"""
-    pairs = []
-    if pos_day_df.empty:
-        return pairs
-
-    # Získanie timestampov príchodov a odchodov
-    prichody_ts = pos_day_df[pos_day_df["action"].str.lower() == "príchod"].sort_values("timestamp")["timestamp"].tolist()
-    odchody_ts = pos_day_df[pos_day_df["action"].str.lower() == "odchod"].sort_values("timestamp")["timestamp"].tolist()
-    
-    used_odchody = [False] * len(odchody_ts)
-    
-    # Sparovanie príchodov s nasledujúcim odchodom
-    for pr_ts in prichody_ts:
-        od_ts = None
-        for i, od_time in enumerate(odchody_ts):
-            if not used_odchody[i] and od_time > pr_ts:
-                od_ts = od_time
-                used_odchody[i] = True
-                break
-        pairs.append({"pr": pr_ts, "od": od_ts})
-    
-    # Zostávajúce odchody bez príchodu
-    for i, od_time in enumerate(odchody_ts):
-        if not used_odchody[i]:
-            pairs.append({"pr": None, "od": od_time})
-    
-    return pairs
-
-
 st.title("🕒 Prehľad dochádzky - Veliteľ")
 
 today = datetime.now(tz).date()
 yesterday = today - timedelta(days=1)
-start_dt = tz.localize(datetime.combine(yesterday, time.min))
-end_dt = tz.localize(datetime.combine(today + timedelta(days=1), time.min))
+start_dt = tz.localize(datetime.combine(yesterday, datetime.min.time()))
+end_dt = tz.localize(datetime.combine(today + timedelta(days=1), datetime.min.time()))
 df = load_attendance(start_dt, end_dt)
 
 if df.empty:
@@ -101,13 +83,11 @@ else:
             st.write("— žiadne záznamy —")
             continue
         for pos in POSITIONS:
-            pos_df = df_day[df_day["position"] == pos]
             st.markdown(f"**{pos}**")
-            if pos_df.empty:
+            pos_df = df_day[df_day["position"] == pos]
+            entries = all_entries(pos_df)
+            if not entries:
                 st.write("— žiadne záznamy —")
-                continue
-            pairs = get_user_pairs(pos_df)
-            for p in pairs:
-                pr_str = p["pr"].strftime("%H:%M") if p["pr"] else "—"
-                od_str = p["od"].strftime("%H:%M") if p["od"] else "—"
-                st.write(f"➡️ Príchod: {pr_str} | Odchod: {od_str}")
+            else:
+                for e in entries:
+                    st.write(e)
