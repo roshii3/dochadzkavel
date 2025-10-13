@@ -53,29 +53,34 @@ def load_attendance(start_dt, end_dt):
     return df
 
 # ---------- ZOBRAZENIE DÁT ----------
+
 def get_user_pairs(pos_day_df: pd.DataFrame):
-    """Vytvorí páry príchod/odchod pre každého používateľa"""
+    """Vytvorí páry príchod/odchod pre každého používateľa, vrátane nesparovaných odchodov/príchodov"""
     pairs = []
     if pos_day_df.empty:
         return pairs
-    prichody = pos_day_df[pos_day_df["action"].str.lower() == "príchod"].sort_values("timestamp")
-    odchody = pos_day_df[pos_day_df["action"].str.lower() == "odchod"].sort_values("timestamp")
+    prichody = pos_day_df[pos_day_df["action"].str.lower() == "príchod"].sort_values("timestamp").to_list()
+    odchody = pos_day_df[pos_day_df["action"].str.lower() == "odchod"].sort_values("timestamp").to_list()
     
-    # Spárovanie príchod / odchod
-    od_index = 0
-    for idx, pr_row in prichody.iterrows():
-        od_row = None
-        while od_index < len(odchody):
-            candidate = odchody.iloc[od_index]
-            if candidate.timestamp > pr_row.timestamp:
-                od_row = candidate
-                od_index += 1
+    prichody_ts = list(pos_day_df[pos_day_df["action"].str.lower() == "príchod"].sort_values("timestamp")["timestamp"])
+    odchody_ts = list(pos_day_df[pos_day_df["action"].str.lower() == "odchod"].sort_values("timestamp")["timestamp"])
+    
+    used_odchody = [False]*len(odchody_ts)
+    
+    for pr_ts in prichody_ts:
+        od_ts = None
+        for i, od_time in enumerate(odchody_ts):
+            if not used_odchody[i] and od_time > pr_ts:
+                od_ts = od_time
+                used_odchody[i] = True
                 break
-            od_index += 1
-        pairs.append({"pr": pr_row.timestamp, "od": od_row.timestamp if od_row is not None else None})
+        pairs.append({"pr": pr_ts, "od": od_ts})
+    
     # zostávajúce odchody bez príchodu
-    for j in range(od_index, len(odchody)):
-        pairs.append({"pr": None, "od": odchody.iloc[j].timestamp})
+    for i, od_time in enumerate(odchody_ts):
+        if not used_odchody[i]:
+            pairs.append({"pr": None, "od": od_time})
+    
     return pairs
 
 st.title("🕒 Prehľad dochádzky - Veliteľ")
