@@ -1,11 +1,10 @@
 # streamlit_velitel.py
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
 import pytz
 from supabase import create_client, Client
 
-# ---------- CONFIG ----------
 st.set_page_config(page_title="Veliteľ - Dochádzka", layout="wide")
 hide_st_style = """
     <style>
@@ -25,7 +24,7 @@ tz = pytz.timezone("Europe/Bratislava")
 
 POSITIONS = ["Veliteľ","CCTV","Brány","Sklad2","Sklad3","Turniket2","Turniket3","Plombovac2","Plombovac3"]
 
-# ---------- OVERENIE PRIHLASENIA ----------
+# ---------- LOGIN ----------
 if "velitel_logged" not in st.session_state:
     st.session_state.velitel_logged = False
 
@@ -52,27 +51,22 @@ def load_attendance(start_dt, end_dt):
     df["time"] = df["timestamp"].dt.time
     return df
 
-# ---------- PÁROVANIE PRÍCHOD/ODCHOD PODĽA SMENY ----------
-def get_shifts(df_day):
+# ---------- PÁROVANIE PRÍCHOD/ODCHOD PODĽA POZNÁMOK ----------
+def get_attendance_pairs(df_day):
     result = {}
-    # definuj smeny
-    shifts = {"06:00-14:00": (time(6,0), time(14,0)),
-              "14:00-22:00": (time(14,0), time(22,0))}
     for pos in POSITIONS:
         pos_df = df_day[df_day["position"] == pos].sort_values("timestamp")
-        shift_records = []
-        for shift_name, (start, end) in shifts.items():
-            # vyfiltruj prichody a odchody v smene
-            prichody = pos_df[(pos_df["action"].str.lower()=="príchod") & 
-                              (pos_df["time"] >= start) & (pos_df["time"] < end)]
-            odchody = pos_df[(pos_df["action"].str.lower()=="odchod") & 
-                             (pos_df["time"] >= start) & (pos_df["time"] <= end)]
-            first_prichod = prichody["timestamp"].min() if not prichody.empty else None
-            last_odchod = odchody["timestamp"].max() if not odchody.empty else None
-            shift_records.append({"shift": shift_name,
-                                  "prichod": first_prichod,
-                                  "odchod": last_odchod})
-        result[pos] = shift_records
+        prichody = pos_df[pos_df["action"].str.lower()=="príchod"]["timestamp"].tolist()
+        odchody = pos_df[pos_df["action"].str.lower()=="odchod"]["timestamp"].tolist()
+        pairs = []
+
+        # páruj po poradí: prvý príchod -> prvý odchod atď.
+        max_len = max(len(prichody), len(odchody))
+        for i in range(max_len):
+            pr = prichody[i] if i < len(prichody) else None
+            od = odchody[i] if i < len(odchody) else None
+            pairs.append({"prichod": pr, "odchod": od})
+        result[pos] = pairs
     return result
 
 # ---------- ZOBRAZENIE DÁT ----------
@@ -93,10 +87,14 @@ else:
         if df_day.empty:
             st.write("— žiadne záznamy —")
             continue
-        shifts_data = get_shifts(df_day)
+        attendance = get_attendance_pairs(df_day)
         for pos in POSITIONS:
             st.markdown(f"**{pos}**")
-            for rec in shifts_data[pos]:
-                pr_text = rec["prichod"].strftime("%H:%M") if rec["prichod"] else "—"
-                od_text = rec["odchod"].strftime("%H:%M") if rec["odchod"] else "—"
+            pairs = attendance[pos]
+            if not pairs:
+                st.write("— žiadne záznamy —")
+                continue
+            for pair in pairs:
+                pr_text = pair["prichod"].strftime("%H:%M") if pair["prichod"] else "—"
+                od_text = pair["odchod"].strftime("%H:%M") if pair["odchod"] else "—"
                 st.write(f"➡️ Príchod: {pr_text} | Odchod: {od_text}")
