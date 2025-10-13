@@ -25,7 +25,7 @@ tz = pytz.timezone("Europe/Bratislava")
 
 POSITIONS = ["Veliteľ","CCTV","Brány","Sklad2","Sklad3","Turniket2","Turniket3","Plombovac2","Plombovac3"]
 
-# ---------- PRIHLÁSENIE ----------
+# ---------- OVERENIE PRIHLASENIA ----------
 if "velitel_logged" not in st.session_state:
     st.session_state.velitel_logged = False
 
@@ -49,10 +49,29 @@ def load_attendance(start_dt, end_dt):
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["timestamp"] = df["timestamp"].apply(lambda x: tz.localize(x) if pd.notna(x) and x.tzinfo is None else x)
     df["date"] = df["timestamp"].dt.date
-    df["time"] = df["timestamp"].dt.strftime("%H:%M")
     return df
 
-# ---------- HLAVIČKA ----------
+# ---------- VYTIAHNUTIE PÁROV PRÍCHOD-ODCHOD ----------
+def get_attendance_pairs(pos_df):
+    pos_df = pos_df.sort_values("id")
+    pairs = []
+    current_pr = None
+    for _, row in pos_df.iterrows():
+        action = row["action"].lower()
+        ts = row["timestamp"].astimezone(tz)
+        if action == "príchod":
+            current_pr = ts
+        elif action == "odchod":
+            if current_pr:
+                pairs.append((current_pr, ts))
+                current_pr = None
+            else:
+                pairs.append((None, ts))
+    if current_pr:
+        pairs.append((current_pr, None))
+    return pairs
+
+# ---------- ZOBRAZENIE DÁT ----------
 st.title("🕒 Prehľad dochádzky - Veliteľ")
 
 today = datetime.now(tz).date()
@@ -61,40 +80,22 @@ start_dt = tz.localize(datetime.combine(yesterday, datetime.min.time()))
 end_dt = tz.localize(datetime.combine(today + timedelta(days=1), datetime.min.time()))
 df = load_attendance(start_dt, end_dt)
 
-# ---------- SPRACOVANIE ----------
 if df.empty:
     st.warning("⚠️ Nie sú dostupné žiadne dáta pre dnešok ani včerajšok.")
 else:
-    records = []
-    for (pos, date), group in df.groupby(["position", "date"]):
-        group = group.sort_values("timestamp")
-        prichod = None
-        for _, row in group.iterrows():
-            if row["action"] == "Príchod" and prichod is None:
-                prichod = row["time"]
-            elif row["action"] == "Odchod" and prichod is not None:
-                records.append({
-                    "date": date,
-                    "position": pos,
-                    "Príchod": prichod,
-                    "Odchod": row["time"]
-                })
-                prichod = None
-        if prichod is not None:
-            records.append({
-                "date": date,
-                "position": pos,
-                "Príchod": prichod,
-                "Odchod": "—"
-            })
-
-    final_df = pd.DataFrame(records).sort_values(by=["date", "position", "Príchod"])
-
-    # ---------- ZOBRAZENIE ----------
-    for date, group in final_df.groupby("date"):
-        st.subheader(date.strftime("%A %d.%m.%Y"))
-        for pos, pos_group in group.groupby("position"):
-            st.markdown(f"### {pos}")
-            for _, row in pos_group.iterrows():
-                st.write(f"➡️ Príchod: {row['Príchod']} | Odchod: {row['Odchod']}")
-            st.markdown("<hr style='border:1px solid #ddd;'>", unsafe_allow_html=True)
+    for day in [yesterday, today]:
+        st.subheader(day.strftime("%A %d.%m.%Y"))
+        df_day = df[df["date"] == day]
+        if df_day.empty:
+            st.write("— žiadne záznamy —")
+            continue
+        for pos in POSITIONS:
+            pos_df = df_day[df_day["position"] == pos]
+            st.markdown(f"**{pos}**")
+            if pos_df.empty:
+                st.write("— žiadne záznamy —")
+                continue
+            for pr, od in get_attendance_pairs(pos_df):
+                pr_str = pr.strftime("%H:%M") if pr else "—"
+                od_str = od.strftime("%H:%M") if od else "—"
+                st.write(f"➡️ Príchod: {pr_str} | Odchod: {od_str}")
