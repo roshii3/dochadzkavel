@@ -1,7 +1,7 @@
-# streamlit_velitel_admin_style.py
+# streamlit_velitel_full.py
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
 import pytz
 from supabase import create_client, Client
 
@@ -49,31 +49,35 @@ def load_attendance(start_dt, end_dt):
     df["timestamp"] = df["timestamp"].apply(lambda x: tz.localize(x) if pd.notna(x) and x.tzinfo is None else x)
     df["date"] = df["timestamp"].dt.date
     df["time"] = df["timestamp"].dt.time
+    df = df.sort_values("timestamp")
     return df
 
-# ---------- PÁROVANIE RANNÁ / POOBEDNÁ ----------
-def get_shift_pairs(pos_df):
+# ---------- GENEROVANIE PÁROV ----------
+def generate_pairs(pos_df):
     """
-    Pos_df: dataframe pre jednu pozíciu v rámci jedného dňa
+    Generuje zoznam príchod/odchod párov.
+    Zachováva všetky záznamy, aj nesparované.
     """
     pos_df = pos_df.sort_values("timestamp")
     pairs = []
-    prichody = pos_df[pos_df["action"].str.lower() == "príchod"]["timestamp"].tolist()
-    odchody = pos_df[pos_df["action"].str.lower() == "odchod"]["timestamp"].tolist()
+    buffer_prichod = []
 
-    # Rozdelíme do ranná / poobedná podľa poradia
-    while prichody or odchody:
-        pr = prichody.pop(0) if prichody else None
-        od = None
-        if odchody:
-            # nájdeme prvý odchod po príchode
-            for i, o in enumerate(odchody):
-                if pr is None or o >= pr:
-                    od = odchody.pop(i)
-                    break
+    for _, row in pos_df.iterrows():
+        action = row["action"].lower()
+        ts = row["timestamp"]
+        if action == "príchod":
+            buffer_prichod.append(ts)
+        elif action == "odchod":
+            if buffer_prichod:
+                pr = buffer_prichod.pop(0)
+                pairs.append({"prichod": pr, "odchod": ts})
             else:
-                od = odchody.pop(0)
-        pairs.append({"prichod": pr, "odchod": od})
+                pairs.append({"prichod": None, "odchod": ts})
+
+    # zostali príchody bez odchodov
+    for pr in buffer_prichod:
+        pairs.append({"prichod": pr, "odchod": None})
+
     return pairs
 
 # ---------- ZOBRAZENIE DÁT ----------
@@ -100,7 +104,7 @@ else:
             if pos_df.empty:
                 st.write("— žiadne záznamy —")
                 continue
-            pairs = get_shift_pairs(pos_df)
+            pairs = generate_pairs(pos_df)
             for pair in pairs:
                 pr_text = pair["prichod"].strftime("%H:%M") if pair["prichod"] else "—"
                 od_text = pair["odchod"].strftime("%H:%M") if pair["odchod"] else "—"
