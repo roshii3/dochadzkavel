@@ -53,20 +53,19 @@ def load_attendance(start_dt, end_dt):
     return df
 
 # ---------- ZOBRAZENIE DÁT ----------
-
 def get_user_pairs(pos_day_df: pd.DataFrame):
     """Vytvorí páry príchod/odchod pre každého používateľa, vrátane nesparovaných odchodov/príchodov"""
     pairs = []
     if pos_day_df.empty:
         return pairs
-    prichody = pos_day_df[pos_day_df["action"].str.lower() == "príchod"].sort_values("timestamp").to_list()
-    odchody = pos_day_df[pos_day_df["action"].str.lower() == "odchod"].sort_values("timestamp").to_list()
+
+    # Získanie timestampov príchodov a odchodov
+    prichody_ts = pos_day_df[pos_day_df["action"].str.lower() == "príchod"].sort_values("timestamp")["timestamp"].tolist()
+    odchody_ts = pos_day_df[pos_day_df["action"].str.lower() == "odchod"].sort_values("timestamp")["timestamp"].tolist()
     
-    prichody_ts = list(pos_day_df[pos_day_df["action"].str.lower() == "príchod"].sort_values("timestamp")["timestamp"])
-    odchody_ts = list(pos_day_df[pos_day_df["action"].str.lower() == "odchod"].sort_values("timestamp")["timestamp"])
+    used_odchody = [False] * len(odchody_ts)
     
-    used_odchody = [False]*len(odchody_ts)
-    
+    # Sparovanie príchodov s nasledujúcim odchodom
     for pr_ts in prichody_ts:
         od_ts = None
         for i, od_time in enumerate(odchody_ts):
@@ -76,12 +75,13 @@ def get_user_pairs(pos_day_df: pd.DataFrame):
                 break
         pairs.append({"pr": pr_ts, "od": od_ts})
     
-    # zostávajúce odchody bez príchodu
+    # Zostávajúce odchody bez príchodu
     for i, od_time in enumerate(odchody_ts):
         if not used_odchody[i]:
             pairs.append({"pr": None, "od": od_time})
     
     return pairs
+
 
 st.title("🕒 Prehľad dochádzky - Veliteľ")
 
