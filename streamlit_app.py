@@ -1,7 +1,7 @@
-# streamlit_velitel.py
+# streamlit_velitel_admin_style.py
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import pytz
 from supabase import create_client, Client
 
@@ -51,23 +51,30 @@ def load_attendance(start_dt, end_dt):
     df["time"] = df["timestamp"].dt.time
     return df
 
-# ---------- PÁROVANIE PRÍCHOD/ODCHOD PODĽA POZNÁMOK ----------
-def get_attendance_pairs(df_day):
-    result = {}
-    for pos in POSITIONS:
-        pos_df = df_day[df_day["position"] == pos].sort_values("timestamp")
-        prichody = pos_df[pos_df["action"].str.lower()=="príchod"]["timestamp"].tolist()
-        odchody = pos_df[pos_df["action"].str.lower()=="odchod"]["timestamp"].tolist()
-        pairs = []
+# ---------- PÁROVANIE RANNÁ / POOBEDNÁ ----------
+def get_shift_pairs(pos_df):
+    """
+    Pos_df: dataframe pre jednu pozíciu v rámci jedného dňa
+    """
+    pos_df = pos_df.sort_values("timestamp")
+    pairs = []
+    prichody = pos_df[pos_df["action"].str.lower() == "príchod"]["timestamp"].tolist()
+    odchody = pos_df[pos_df["action"].str.lower() == "odchod"]["timestamp"].tolist()
 
-        # páruj po poradí: prvý príchod -> prvý odchod atď.
-        max_len = max(len(prichody), len(odchody))
-        for i in range(max_len):
-            pr = prichody[i] if i < len(prichody) else None
-            od = odchody[i] if i < len(odchody) else None
-            pairs.append({"prichod": pr, "odchod": od})
-        result[pos] = pairs
-    return result
+    # Rozdelíme do ranná / poobedná podľa poradia
+    while prichody or odchody:
+        pr = prichody.pop(0) if prichody else None
+        od = None
+        if odchody:
+            # nájdeme prvý odchod po príchode
+            for i, o in enumerate(odchody):
+                if pr is None or o >= pr:
+                    od = odchody.pop(i)
+                    break
+            else:
+                od = odchody.pop(0)
+        pairs.append({"prichod": pr, "odchod": od})
+    return pairs
 
 # ---------- ZOBRAZENIE DÁT ----------
 st.title("🕒 Prehľad dochádzky - Veliteľ")
@@ -87,13 +94,13 @@ else:
         if df_day.empty:
             st.write("— žiadne záznamy —")
             continue
-        attendance = get_attendance_pairs(df_day)
         for pos in POSITIONS:
             st.markdown(f"**{pos}**")
-            pairs = attendance[pos]
-            if not pairs:
+            pos_df = df_day[df_day["position"] == pos]
+            if pos_df.empty:
                 st.write("— žiadne záznamy —")
                 continue
+            pairs = get_shift_pairs(pos_df)
             for pair in pairs:
                 pr_text = pair["prichod"].strftime("%H:%M") if pair["prichod"] else "—"
                 od_text = pair["odchod"].strftime("%H:%M") if pair["odchod"] else "—"
