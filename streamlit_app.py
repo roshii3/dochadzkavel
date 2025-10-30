@@ -91,3 +91,29 @@ else:
             else:
                 for e in entries:
                     st.write(e)
+# ---------- TABUĽKA ODCHODOV VELITEĽA ZA TENTO TÝŽDEŇ ----------
+st.subheader("📋 Potvrdené odchody veliteľa (aktuálny týždeň)")
+
+# Výpočet pondelka aktuálneho týždňa
+today_dt = datetime.now(tz)
+monday_dt = today_dt - timedelta(days=today_dt.weekday())
+start_week = tz.localize(datetime.combine(monday_dt.date(), datetime.min.time()))
+end_week = tz.localize(datetime.combine(today_dt.date() + timedelta(days=1), datetime.min.time()))
+
+# Načítanie dát len pre tento týždeň
+df_week = load_attendance(start_week, end_week)
+
+if not df_week.empty:
+    # Filtrovanie len pre pozíciu Veliteľ a akciu "odchod"
+    df_velitel = df_week[(df_week["position"] == "Veliteľ") & (df_week["action"].str.lower() == "odchod")]
+    if df_velitel.empty:
+        st.info("Žiadne potvrdené odchody veliteľa v tomto týždni.")
+    else:
+        df_velitel["Dátum"] = df_velitel["timestamp"].dt.strftime("%d.%m.%Y")
+        df_velitel["Čas"] = df_velitel["timestamp"].dt.strftime("%H:%M")
+        df_tab = df_velitel[["Dátum", "Čas", "position", "action"]].rename(
+            columns={"position": "Pozícia", "action": "Akcia"}
+        ).sort_values(["Dátum", "Čas"])
+        st.dataframe(df_tab, use_container_width=True)
+else:
+    st.info("Nie sú dostupné dáta pre tento týždeň.")
